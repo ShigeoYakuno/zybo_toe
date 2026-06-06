@@ -1,0 +1,20 @@
+eth.src == 02:00:00:00:00:01
+
+
+docsの実装を進めている。現在arp成功だがtcp失敗
+TCP SYN がまだ見えない
+python側コードを起動しているが、こっちにミスはないよね？
+
+他のAIからはブロードキャストの変更を提案されている
+// 診断用: 宛先MACをブロードキャストに変更
+#define REMOTE_MAC_HI   0xFFFFU
+#define REMOTE_MAC_LO   0xFFFFFFFFUL
+
+arpだけは届く
+281	48.349965700	02:00:00:00:00:01	Broadcast	ARP	60	Who has 192.168.1.20? Tell 192.168.1.100
+
+
+arp.opcode == 2 && arp.src.proto_ipv4 == 192.168.1.20
+
+LD2	LD3	LD0	判定
+ON	ON	ON	SYN は RMII まで届いている → Wireshark/PC 側の問題

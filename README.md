@@ -1,0 +1,189 @@
+# ZYBO Z7-20 TCP Offload Engine (TOE)
+
+ZYBO Z7-20 の PL (FPGA) に TCP/IP スタックを実装した TCP Offload Engine です。  
+PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送受信を行えます。
+
+---
+
+## ハードウェア構成
+
+| 項目 | 内容 |
+|------|------|
+| ボード | Digilent ZYBO Z7-20 (xc7z020clg400-1) |
+| PHY | Waveshare LAN8720 ETH Board (RMII) |
+| PHY 接続 | PMOD JC (TX/RX) + JD (REF_CLK) |
+| ツール | Vivado 2024.2 / Vitis 2024.2 |
+
+---
+
+## システム概要
+
+```
+[LAN8720 PHY]
+      | RMII (50 MHz)
+[rmii_mac]
+      |  AXI-Stream
+[frame_mux] ── EtherType 0x0806 ──> [arp_engine]
+      |                                   | ARP Request/Reply TX
+      | EtherType 0x0800                  |
+      v                             [TX Arbiter] ── [rmii_mac TX]
+[tcp_layer]                               ^
+  ├─ tcp_rx_hdr_dec                       |
+  ├─ tcp_hdr_gen ────────────────────────┘
+  ├─ tcp_state_ctrl  (8-state FSM, Active Open)
+  ├─ tx_buffer  (8 KB 循環バッファ、再送対応)
+  ├─ rx_buffer  (4 KB FIFO)
+  └─ lfsr_isn   (ISN 生成)
+      |
+[axi4lite_regs]  ← xpm_fifo_async CDC
+      | AXI4-Lite
+[PS7 ARM Cortex-A9]
+```
+
+---
+
+## リポジトリ構成
+
+```
+.
+├── hdl/
+│   ├── rtl/
+│   │   ├── mac/          # RMII MAC サブシステム (ebaz4205 移植)
+│   │   └── toe/          # TOE サブシステム (新規実装)
+│   └── constrs/          # XDC ピン配置・タイミング制約
+├── ip_repo/
+│   └── toe_top/          # Vivado カスタム IP パッケージ
+├── vitis/
+│   └── app_component/
+│       └── src/          # ベアメタル C アプリ (UART コマンドシェル)
+├── python/
+│   ├── tcp_server.py     # PC 側 TCP サーバ (動作確認用)
+│   └── read_regs.py      # レジスタ読み出しスクリプト
+├── bitstream/
+│   ├── toe_nn2.bit       # ビットストリーム (すぐに書き込んで試せる)
+│   └── toe_nn2.xsa       # XSA (Vitis プラットフォーム再生成用)
+├── docs/
+│   ├── toe_design.md     # 設計仕様書 (モジュール階層・レジスタマップ・手順)
+│   ├── history.md        # 設計履歴
+│   ├── analysis.md       # 解析メモ
+│   └── blog.md           # 開発ログ
+└── project_1.xpr         # Vivado プロジェクトファイル
+```
+
+---
+
+## 開発状況
+
+> **現在 TCP 接続確立に取り組み中です。ARP は動作確認済み。**
+
+| 機能 | 状態 | 備考 |
+|------|------|------|
+| FPGA クロック動作 | ✅ | 50 MHz RMII クロック正常 |
+| PS → FPGA レジスタ書き込み | ✅ | AXI4-Lite 正常 |
+| Ethernet リンク確立 | ✅ | LAN8720 ↔ PC 直結 |
+| FPGA TX 物理送出 | ✅ | rmii_tx_en sticky (LD0) |
+| FPGA RX 受信 | ✅ | CRC 正常フレーム受信 (LD1, LD2) |
+| ARP 解決 | ✅ | arp_mac_valid sticky (LD3) |
+| TCP SYN 送出 (MAC 到達) | ✅ | mac_tx_tvalid sticky 確認済み |
+| PC が TCP SYN を受信 | ⚠️ | Wireshark で未確認 (診断中) |
+| TCP ESTABLISHED | ❌ | 未達成 |
+
+
+
+### 残課題・次のステップ
+
+- Wireshark フィルタ `ether src 02:00:00:00:00:01` でキャプチャ NIC (イーサネット 3) を確認
+- `python/tcp_server.py` を事前に起動してから TCP 接続テスト
+- TCP SYN が PC に届くことを確認 → ESTABLISHED 達成へ
+
+**TCP 通信確立まであきらめずに開発を継続します。**
+
+---
+
+## すぐに試す (ビットストリームを使う場合)
+
+1. ZYBO Z7-20 に Waveshare LAN8720 を PMOD JC/JD に接続する
+2. `bitstream/toe_nn2.bit` を ZYBO に書き込む
+3. `bitstream/toe_nn2.xsa` から Vitis プラットフォームを作成し、`vitis/app_component/src/` をビルド・実行する
+4. UART を開き、`help` コマンドで操作を確認する
+5. PC 側で `python/tcp_server.py` を起動して動作確認する
+
+---
+
+## Vivado プロジェクトをビルドする場合
+
+1. `project_1.xpr` を Vivado 2024.2 で開く
+2. カスタム IP のパスを `ip_repo/toe_top/` に設定する  
+   (Tools → Settings → IP → Repository)
+3. Generate Bitstream を実行する
+
+### ゼロから作り直す場合
+
+詳細手順は [docs/toe_design.md](docs/toe_design.md) の「Vivado プロジェクト作成手順」を参照。
+
+---
+
+## AXI4-Lite レジスタマップ
+
+ベースアドレス: `0x4000_0000` (PS デフォルト)
+
+| オフセット | 名前 | R/W | 説明 |
+|-----------|------|-----|------|
+| 0x00 | CTRL | R/W | [0]=connect_req, [1]=disconnect_req, [2]=arp_req |
+| 0x04 | STATUS | R | [3:0]=tcp_state, [4]=irq_pending, [5]=arp_mac_valid |
+| 0x08 | LOCAL_MAC_HI | R/W | local_mac[47:32] |
+| 0x0C | LOCAL_MAC_LO | R/W | local_mac[31:0] |
+| 0x10 | REMOTE_MAC_HI | R/W | remote_mac[47:32] |
+| 0x14 | REMOTE_MAC_LO | R/W | remote_mac[31:0] |
+| 0x18 | LOCAL_IP | R/W | ローカル IP アドレス |
+| 0x1C | REMOTE_IP | R/W | リモート IP アドレス |
+| 0x20 | LOCAL_PORT | R/W | ローカル TCP ポート |
+| 0x24 | REMOTE_PORT | R/W | リモート TCP ポート |
+| 0x28 | TX_DATA | W | バイト書き込み → TX FIFO |
+| 0x2C | RX_DATA | R | RX FIFO からバイト読み出し |
+| 0x30 | RX_COUNT | R | RX FIFO 有効バイト数 [11:0] |
+
+TCP ステート値 (STATUS[3:0]): 0=CLOSED, 1=SYN_SENT, 2=ESTABLISHED, 3=FIN_WAIT_1, 4=FIN_WAIT_2, 5=TIME_WAIT, 6=CLOSE_WAIT, 7=LAST_ACK
+
+---
+
+## ファームウェア使用例
+
+```c
+#define TOE_BASE 0x40000000UL
+
+// IP/ポート設定
+Xil_Out32(TOE_BASE + 0x18, 0xC0A80164);  // LOCAL_IP  192.168.1.100
+Xil_Out32(TOE_BASE + 0x1C, 0xC0A80114);  // REMOTE_IP 192.168.1.20
+Xil_Out32(TOE_BASE + 0x20, 5000);         // LOCAL_PORT
+Xil_Out32(TOE_BASE + 0x24, 5000);         // REMOTE_PORT
+
+// ARP → TCP 接続
+Xil_Out32(TOE_BASE + 0x00, 0x4);          // arp_req
+// ... ARP 完了待ち ...
+Xil_Out32(TOE_BASE + 0x00, 0x1);          // connect_req
+// ... STATUS[3:0] == 2 (ESTABLISHED) 待ち ...
+
+// データ送受信
+Xil_Out32(TOE_BASE + 0x28, 'H');          // TX
+uint8_t b = Xil_In32(TOE_BASE + 0x2C);   // RX
+```
+
+---
+
+## 既知の制限事項
+
+- 単一 TCP 接続のみ (Active Open / クライアント動作)
+- IPv6 非対応、IP フラグメント非対応
+- ウィンドウサイズ固定 4096 バイト
+- MDIO 制御未実装 (PHY はストラップ設定で auto-negotiation)
+- RX バッファ満杯時はペイロードをドロップ
+
+---
+
+## 参考
+
+- RMII MAC: [ebaz4205_ethernet](https://github.com/nefarius/ebaz4205_ethernet) (Xilinx SV 実装)
+- TCP/IP 参考実装: fix-tcpip-project (Altera MAX10 向け VHDL, L.Ratchanon 氏)
+- Waveshare LAN8720 ETH Board
+- Digilent ZYBO Z7 Reference Manual
