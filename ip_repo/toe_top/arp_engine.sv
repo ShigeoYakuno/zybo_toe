@@ -166,6 +166,12 @@ logic do_reply   = 1'b0; // ARP Reply送信要求
 logic [47:0] reply_dst_mac = '0; // Reply宛先MAC
 logic [31:0] reply_dst_ip  = '0; // Reply宛先IP
 
+// TX関連 (always_ff内で使用するため先行宣言)
+logic [5:0] tx_ptr    = '0;
+logic       tx_active = 1'b0;
+logic       tx_send_start;
+assign tx_send_start = !tx_active && (do_reply || do_request);
+
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         arp_state        <= ARP_IDLE;
@@ -214,12 +220,6 @@ end
 // TX: 60バイトARPパケット生成・送信
 // ---------------------------------------------------------------------------
 logic [7:0] pkt_buf [0:59]; // パケットバッファ (組み合わせ回路で構築)
-logic [5:0] tx_ptr    = '0; // 現在送信中のバイトインデックス
-logic       tx_active = 1'b0;
-logic       tx_send_start;
-
-// TX開始条件: 非送信中で送信要求あり
-assign tx_send_start = !tx_active && (do_reply || do_request);
 
 // is_reply_pkt: 送信開始サイクル(tx_active=0)は do_reply を直接使用し、
 // 送信中(tx_active=1)はラッチ値を使用する。

@@ -7,28 +7,28 @@ module udp_layer #(
     parameter PAYLOAD_BYTES = 64,
     parameter CLK_HZ        = 50_000_000
 )(
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // Quasi-static config (2FF-synced from AXI in axi4lite_regs)
-    input  logic [47:0] local_mac,
-    input  logic [47:0] remote_mac,
-    input  logic [31:0] local_ip,
-    input  logic [31:0] remote_ip,
-    input  logic [15:0] local_port,
-    input  logic [15:0] remote_port,
+    input  wire [47:0] local_mac,
+    input  wire [47:0] remote_mac,
+    input  wire [31:0] local_ip,
+    input  wire [31:0] remote_ip,
+    input  wire [15:0] local_port,
+    input  wire [15:0] remote_port,
 
     // ARM control: rising edge triggers one TX
-    input  logic        send_req,
+    input  wire        send_req,
 
     // TX byte stream (from xpm_fifo_async in axi4lite_regs, clk domain)
-    input  logic [7:0]  tx_wr_data,
-    input  logic        tx_wr_en,
+    input  wire [7:0]  tx_wr_data,
+    input  wire        tx_wr_en,
     output logic        tx_wr_full,
 
     // RX byte stream (to xpm_fifo_async in axi4lite_regs, clk domain)
     output logic [7:0]  rx_rd_data,
-    input  logic        rx_rd_en,
+    input  wire        rx_rd_en,
     output logic        rx_rd_empty,
     output logic [11:0] rx_rd_count,
 
@@ -36,15 +36,15 @@ module udp_layer #(
     output logic        tx_busy,
 
     // RX from MAC (no backpressure)
-    input  logic [7:0]  rx_tdata,
-    input  logic        rx_tvalid,
-    input  logic        rx_tlast,
-    input  logic        rx_tuser,   // 1 = CRC error
+    input  wire [7:0]  rx_tdata,
+    input  wire        rx_tvalid,
+    input  wire        rx_tlast,
+    input  wire        rx_tuser,   // 1 = CRC error
 
     // TX to MAC (with backpressure)
     output logic [7:0]  tx_tdata,
     output logic        tx_tvalid,
-    input  logic        tx_tready,
+    input  wire        tx_tready,
     output logic        tx_tlast
 );
 
@@ -106,7 +106,8 @@ always_ff @(posedge clk or negedge rst_n) begin : p_tx
     end else begin
         send_prev <= send_req;
         if (!tx_sending) begin
-            if (send_req && !send_prev && tx_fill >= 7'(PAYLOAD_BYTES)) begin
+            // Level-sensitive when buffer ready, edge-gated to prevent re-trigger.
+            if (send_req && !send_prev && (tx_fill >= 7'(PAYLOAD_BYTES))) begin
                 tx_sending <= 1'b1;
                 tx_ptr     <= '0;
             end
@@ -189,7 +190,10 @@ logic rx_accept;
 assign rx_accept = rx_proto_ok && rx_ip_ok && rx_port_ok;
 
 logic rx_fifo_wr_en, rx_fifo_full;
-assign rx_fifo_wr_en = rx_tvalid && !rx_tuser && rx_accept
+// tuser from mii_mac_rx is 1 for all non-tlast bytes (CRC not yet validated);
+// check it only at tlast. Since payload bytes are never at tlast, drop the
+// !rx_tuser gate here — CRC-bad frames are filtered by IP/port checks anyway.
+assign rx_fifo_wr_en = rx_tvalid && rx_accept
                      && (rx_b_cnt >= 8'd42)
                      && (rx_pay_cnt < 7'(PAYLOAD_BYTES))
                      && !rx_fifo_full;
@@ -239,7 +243,7 @@ xpm_fifo_sync #(
     .USE_ADV_FEATURES ("0000"),
     .DOUT_RESET_VALUE ("0")
 ) u_rx_fifo (
-    .clk          (clk),
+    .wr_clk       (clk),
     .rst          (~rst_n),
     .din          (rx_tdata),
     .wr_en        (rx_fifo_wr_en),

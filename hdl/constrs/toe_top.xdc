@@ -69,9 +69,8 @@ set_input_delay  -clock ref_clk -min  0.0 [get_ports {rmii_rxd[*] rmii_crs_dv}]
 set_property SLEW FAST [get_ports {rmii_txd[*] rmii_tx_en}]
 set_property DRIVE 8   [get_ports {rmii_txd[*] rmii_tx_en}]
 
-## RMII TX出力レジスタをIOB (I/Oブロック内) に配置してclock-to-output遅延を最小化。
-## 非CCIOクロック使用時はこれが特に重要 (IOBのTco ≈ 1-2ns vs 通常5-8ns)。
-set_property IOB TRUE [get_ports {rmii_txd[*] rmii_tx_en}]
+## IOB TRUE は非CCIOクロック(T12, CLOCK_DEDICATED_ROUTE FALSE)では
+## クロックがIOBフロップに届かず配置エラーになるため削除。
 
 
 set_property -dict { PACKAGE_PIN M14   IOSTANDARD LVCMOS33 } [get_ports { led_tri_o[0] }];

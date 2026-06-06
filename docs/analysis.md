@@ -331,6 +331,85 @@ python tcp_server.py
 
 ---
 
+---
+
+## 11. UDP 双方向通信 動作確認 (2026-06-06)
+
+### 動作確認済み内容
+
+| 方向 | コマンド/ツール | 結果 |
+|------|--------------|------|
+| FPGA → PC | `send64 <文字列>` | PC 側 udp_server.py で受信確認 |
+| PC → FPGA | udp_server.py から送信 | `recv` コマンドで正しい文字列表示 |
+
+### 修正したバグ (UDP パス)
+
+#### Bug-U1: udp_layer.sv — rx_tuser ゲーティング
+
+`mii_mac_rx` の tuser 信号の仕様を誤解していた。  
+`tuser=1` は「CRC エラー」ではなく「CRC 未確定」を意味し、tlast 以外の全バイトで 1 が出力される。  
+`rx_fifo_wr_en` に `!rx_tuser` を含めていたため、ペイロードバイトが一切 FIFO に書き込まれなかった。
+
+→ `!rx_tuser` 条件を削除。
+
+#### Bug-U2: axi4lite_regs.sv — xpm_fifo_async rd_data_count
+
+`USE_ADV_FEATURES("0004")` は bit2 (wr_data_count) のみ有効化。  
+rd_data_count (bit10) が無効のため `rx_afifo_rd_count` = 0 → `RX_COUNT` レジスタが常に 0 を返した。  
+加えて `RD_DATA_COUNT_WIDTH` 未指定でデフォルト 1 bit → 64 バイトのカウントが切り捨てられていた。
+
+→ `USE_ADV_FEATURES("0400")` + `RD_DATA_COUNT_WIDTH(13)` に修正。
+
+#### Bug-U3: toe_top.xdc — IOB TRUE 配置エラー
+
+Vivado 2024.2 `[Place 30-722]`: T12 は非 CCIO ピンのためクロックが IOB FF に届かず配置不可能。
+
+→ `set_property IOB TRUE` 行を削除。
+
+---
+
+## 12. TCP モジュール レビュー結果 (2026-06-06)
+
+UDP 動作確認後、TCP モジュール群に同様のバグがないかレビューを実施した。
+
+### mii_mac_rx tuser 仕様の整理
+
+| バイト種別 | tuser の値 |
+|-----------|-----------|
+| tlast 以外 (ペイロード/ヘッダ中) | **1** (CRC 未確定、判断不可) |
+| tlast (フレーム末尾) | 0=CRC 正常 / 1=CRC エラー |
+
+**tuser は tlast バイトでのみ意味を持つ。** ペイロード書き込みロジックで `!rx_tuser` を
+条件にするとペイロード全バイトがブロックされる。
+
+### 各モジュールの確認結果
+
+| モジュール | tuser バグ | FIFO 設定 | その他 | 対処 |
+|-----------|-----------|---------|------|------|
+| tcp_rx_hdr_dec.sv | rev1 で修正済み | N/A (FIFO なし) | NBA バグ rev2 修正済み | 対応不要 |
+| rx_buffer.sv | N/A | **READ_MODE="std" → FWFT 必須** | — | **今回修正** |
+| tx_buffer.sv | N/A | xpm_memory_tdpram 使用 | — | 対応不要 |
+| tcp_hdr_gen.sv | N/A | N/A | rev1〜3 修正済み | 対応不要 |
+| tcp_state_ctrl.sv | N/A | N/A | tx_busy クリア未実装 (ARM 非公開) | 影響なし |
+| lfsr_isn.sv | N/A | N/A | 問題なし | 対応不要 |
+
+### rx_buffer.sv の FWFT バグ詳細
+
+axi4lite_regs の RX ドレイン回路はコンビネーショナル接続を前提とした設計:
+
+```
+empty=0 → rx_rd_en=1 → rx_afifo_wr_en=1, rx_afifo_din=rx_rd_data (現サイクルで有効)
+```
+
+std モード (latency=1) では `rd_en` アサートの 1 クロック後にデータが確定するため、
+`rx_afifo_din` には前のサイクルの dout (初回は不定/0) が書き込まれ、全バイトが化ける。
+
+FWFT モード (latency=0) では `empty=0` の時点で dout に有効データが出ているため正常動作する。  
+UDP の `udp_layer.sv` の rx_fifo が `READ_MODE("fwft"), FIFO_READ_LATENCY(0)` であることからも、
+同じドレイン回路を共用する rx_buffer は FWFT であるべきだったと分かる。
+
+---
+
 ## 9. TCP ステート定義
 
 | 値 | 名前 | 意味 |

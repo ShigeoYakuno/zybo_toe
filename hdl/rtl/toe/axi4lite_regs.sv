@@ -20,34 +20,34 @@ module axi4lite_regs #(
     parameter AXI_ADDR_W = 6   // 64-byte address space
 )(
     // ---- AXI4-Lite slave (PS side) ----------------------------------------
-    input  logic        s_axi_aclk,
-    input  logic        s_axi_aresetn,
+    input  wire        s_axi_aclk,
+    input  wire        s_axi_aresetn,
 
-    input  logic [AXI_ADDR_W-1:0] s_axi_awaddr,
-    input  logic        s_axi_awvalid,
+    input  wire [AXI_ADDR_W-1:0] s_axi_awaddr,
+    input  wire        s_axi_awvalid,
     output logic        s_axi_awready,
 
-    input  logic [31:0] s_axi_wdata,
-    input  logic [3:0]  s_axi_wstrb,
-    input  logic        s_axi_wvalid,
+    input  wire [31:0] s_axi_wdata,
+    input  wire [3:0]  s_axi_wstrb,
+    input  wire        s_axi_wvalid,
     output logic        s_axi_wready,
 
     output logic [1:0]  s_axi_bresp,
     output logic        s_axi_bvalid,
-    input  logic        s_axi_bready,
+    input  wire        s_axi_bready,
 
-    input  logic [AXI_ADDR_W-1:0] s_axi_araddr,
-    input  logic        s_axi_arvalid,
+    input  wire [AXI_ADDR_W-1:0] s_axi_araddr,
+    input  wire        s_axi_arvalid,
     output logic        s_axi_arready,
 
     output logic [31:0] s_axi_rdata,
     output logic [1:0]  s_axi_rresp,
     output logic        s_axi_rvalid,
-    input  logic        s_axi_rready,
+    input  wire        s_axi_rready,
 
     // ---- clk_50 domain outputs (to toe_engine) ---------------------------
-    input  logic        clk_50,
-    input  logic        rst_50_n,
+    input  wire        clk_50,
+    input  wire        rst_50_n,
 
     output logic [47:0] local_mac,
     output logic [47:0] remote_mac,
@@ -63,18 +63,18 @@ module axi4lite_regs #(
     // ---- TX data FIFO (to tx_buffer write port, clk_50 domain) ----------
     output logic [7:0]  tx_wr_data,
     output logic        tx_wr_en,
-    input  logic        tx_wr_full,
+    input  wire        tx_wr_full,
 
     // ---- RX data FIFO (from rx_buffer read port, clk_50 domain) ---------
-    input  logic [7:0]  rx_rd_data,
-    input  logic        rx_rd_en_out,   // driven internally
+    input  wire [7:0]  rx_rd_data,
+    input  wire        rx_rd_en_out,   // driven internally
     output logic        rx_rd_en,
-    input  logic        rx_rd_empty,
-    input  logic [11:0] rx_rd_count,
+    input  wire        rx_rd_empty,
+    input  wire [11:0] rx_rd_count,
 
     // ---- Status from clk_50 domain (to AXI domain via 2FF sync) ---------
-    input  logic        tx_busy_50,
-    input  logic        arp_mac_valid_50
+    input  wire        tx_busy_50,
+    input  wire        arp_mac_valid_50
 );
 
 // ---------------------------------------------------------------------------
@@ -186,12 +186,11 @@ xpm_fifo_async #(
     .DOUT_RESET_VALUE ("0")
 ) u_tx_afifo (
     .wr_clk        (s_axi_aclk),
-    .wr_rst        (~s_axi_aresetn),
+    .rst           (~s_axi_aresetn),
     .din           (tx_fifo_din),
     .wr_en         (tx_fifo_wr_en),
     .full          (tx_fifo_full),
     .rd_clk        (clk_50),
-    .rd_rst        (~rst_50_n),
     .dout          (tx_fifo_dout),
     .rd_en         (tx_fifo_rd_en),
     .empty         (tx_fifo_empty),
@@ -226,30 +225,31 @@ logic        rx_afifo_full;
 logic        rx_afifo_rd_en;
 logic [7:0]  rx_afifo_dout;
 logic        rx_afifo_empty;
+logic [12:0] rx_afifo_rd_count;  // rd_clk (s_axi_aclk) domain
 
 xpm_fifo_async #(
-    .FIFO_MEMORY_TYPE ("block"),
-    .FIFO_WRITE_DEPTH (4096),
-    .WRITE_DATA_WIDTH (8),
-    .READ_DATA_WIDTH  (8),
-    .READ_MODE        ("fwft"),
-    .CDC_SYNC_STAGES  (2),
-    .FIFO_READ_LATENCY(0),
-    .USE_ADV_FEATURES ("0000"),
-    .DOUT_RESET_VALUE ("0")
+    .FIFO_MEMORY_TYPE    ("block"),
+    .FIFO_WRITE_DEPTH    (4096),
+    .WRITE_DATA_WIDTH    (8),
+    .READ_DATA_WIDTH     (8),
+    .READ_MODE           ("fwft"),
+    .CDC_SYNC_STAGES     (2),
+    .FIFO_READ_LATENCY   (0),
+    .USE_ADV_FEATURES    ("0400"),  // bit10 = rd_data_count
+    .RD_DATA_COUNT_WIDTH (13),      // ceil(log2(4096))+1 = 13
+    .DOUT_RESET_VALUE    ("0")
 ) u_rx_afifo (
     .wr_clk        (clk_50),
-    .wr_rst        (~rst_50_n),
+    .rst           (~rst_50_n),
     .din           (rx_afifo_din),
     .wr_en         (rx_afifo_wr_en),
     .full          (rx_afifo_full),
     .rd_clk        (s_axi_aclk),
-    .rd_rst        (~s_axi_aresetn),
     .dout          (rx_afifo_dout),
     .rd_en         (rx_afifo_rd_en),
     .empty         (rx_afifo_empty),
     .wr_data_count (),
-    .rd_data_count (),
+    .rd_data_count (rx_afifo_rd_count),
     .prog_empty    (),
     .prog_full     (),
     .overflow      (),
@@ -277,7 +277,9 @@ logic [AXI_ADDR_W-1:0] wr_addr;
 logic [31:0]           wr_data;
 logic                  wr_addr_lat = 1'b0;
 logic                  wr_data_lat = 1'b0;
-logic                  do_write;
+// do_write: combinatorial — both address and data have been latched
+logic do_write;
+assign do_write = wr_addr_lat && wr_data_lat;
 
 assign s_axi_awready = !wr_addr_lat;
 assign s_axi_wready  = !wr_data_lat;
@@ -285,10 +287,9 @@ assign s_axi_bresp   = 2'b00;  // OKAY
 assign s_axi_arready = 1'b1;   // always ready for reads
 assign s_axi_rresp   = 2'b00;
 
-// TX FIFO write via AXI (TX_DATA register = 0x28)
-assign tx_fifo_wr_en = (s_axi_awvalid && s_axi_wvalid &&
-                        s_axi_awaddr == 6'h28 && !tx_fifo_full);
-assign tx_fifo_din   = s_axi_wdata[7:0];
+// TX FIFO write: fires for one cycle when AXI write to TX_DATA (0x28) completes
+assign tx_fifo_wr_en = do_write && (wr_addr == 6'h28) && !tx_fifo_full;
+assign tx_fifo_din   = wr_data[7:0];
 
 // RX FIFO pop via AXI (RX_DATA register read = 0x2C)
 assign rx_afifo_rd_en = s_axi_arvalid && (s_axi_araddr == 6'h2C) && !rx_afifo_empty;
@@ -324,7 +325,6 @@ always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
         end
 
         // --- Execute write ---
-        do_write = wr_addr_lat && wr_data_lat;
         if (do_write) begin
             wr_addr_lat  <= 1'b0;
             wr_data_lat  <= 1'b0;
@@ -359,7 +359,7 @@ always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
                 6'h20: s_axi_rdata <= {16'h0, reg_lport};
                 6'h24: s_axi_rdata <= {16'h0, reg_rport};
                 6'h2C: s_axi_rdata <= {24'h0, rx_afifo_dout};
-                6'h30: s_axi_rdata <= {20'h0, rx_rd_count};
+                6'h30: s_axi_rdata <= {19'h0, rx_afifo_rd_count};
                 default: s_axi_rdata <= '0;
             endcase
         end

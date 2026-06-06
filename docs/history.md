@@ -137,3 +137,151 @@ MAC RX にはバックプレッシャがないため、全フレームを arp_en
 - MSS ネゴシエーション
 - Selective ACK (SACK)
 - IPv6 対応
+
+---
+
+## 2026-06-03 — TCP モジュール バグ修正 (ip_repo)
+
+### 背景
+
+Phase 2 実装後の動作検証で TCP 通信が確立できなかった。
+各モジュールの RTL レビューにより以下のバグを発見・修正。
+
+### 修正一覧
+
+#### tcp_rx_hdr_dec.sv  rev1 (2026-06-03)
+
+**バグ:** `rx_tuser` を毎バイト累積して CRC エラー判定していた。  
+`mii_mac_rx` は tlast 以外の全バイトで `tuser=1` を出力するため (CRC はフレーム末尾でのみ確定)、
+ペイロード書き込み `pl_wr_en` が常時 false になり受信データがバッファに入らなかった。
+
+**修正:** `crc_err` の累積ロジックを削除。`!rx_tuser` の条件を tlast バイトのみで評価するよう変更。
+
+#### tcp_rx_hdr_dec.sv  rev2 (2026-06-03)
+
+**バグ:** `ip_csum_valid`・TCP 疑似ヘッダ `ps_sum` の NBA タイミングバグ。  
+`always_ff` 内で `=` (ブロッキング) で計算した値を同サイクル中に `<=` 代入していたため、
+Vivado が組み合わせ計算を独立 FF として合成し値が 1 クロック遅れた。
+
+**修正:** `automatic logic` ローカル変数で組み合わせ計算後に NBA 代入するよう変更。
+
+#### tcp_hdr_gen.sv  rev1 (2026-06-01)
+
+**バグ:** `S_IDLE` で `build_hdr()` を即呼び出すと、同サイクルで `<=` 代入した `l_*` レジスタが
+まだ未確定のため宛先 MAC が全0になった。
+
+**修正:** `S_IDLE` → `S_BUILD` を経由してから `build_hdr()` を呼ぶ方式に変更。
+
+#### tcp_hdr_gen.sv  rev2 (2026-06-03)
+
+**バグ:** `S_SEND_HDR` で `if (tx_tready)` のみ判定していたため、
+`S_BUILD → S_SEND_HDR` 遷移直後の初回サイクル (`tx_tvalid=0`) でも `tx_ptr` がインクリメントされた。
+`hdr_buf[1]` がスキップされ FCS が不正 → PC NIC がフレームをハードウェア破棄 → Wireshark に SYN が届かなかった。
+
+**修正:** `if (tx_tready && tx_tvalid)` に変更。
+
+#### tcp_hdr_gen.sv  rev3 (2026-06-03)
+
+**バグ:** `S_SEND_PAD` でバイト59 を転送する瞬間に `tx_tlast=1` が確定している必要があるが、
+`tx_ptr==59` で `tx_tlast<=1'b1` (NBA) とすると次クロックで反映されるため、
+バイト59が `tlast=0` で転送された。`append_crc` が FCS を出力せずフレームが破棄された。
+
+**修正:** `tx_ptr==58` の転送確定時点で先読みして `tx_tlast<=1'b1` をアサート。
+
+---
+
+## 2026-06-06 — UDP 双方向通信 動作確認・バグ修正
+
+### 背景
+
+Phase 2 の TCP スタックをそのまま使おうとしたが、まず UDP で動作確認することとした。
+TCP スタックの udp_layer.sv をベースに UDP 専用のシンプルな実装でデバッグを進めた。
+
+### 確認内容
+
+UART コマンド `send64 <文字列>` で UDP 64バイト送信、PC 側 `udp_server.py` で受信確認。  
+PC から UDP パケットを送信し、UART コマンド `recv` で受信文字列を確認。  
+→ **双方向 UDP 通信 (FPGA↔PC) 動作確認済み。**
+
+### 修正一覧
+
+#### udp_layer.sv — rx_fifo_wr_en の tuser ゲーティング削除
+
+**バグ:** `rx_fifo_wr_en` に `!rx_tuser` 条件が含まれていた。  
+`mii_mac_rx` は tlast 以外の全バイトで `tuser=1` を出力するため (CRC 検証はフレーム末尾でのみ確定)、
+ペイロードバイト (42〜104 バイト目) が FIFO に書き込まれなかった。
+
+**修正:** `!rx_tuser` 条件を `rx_fifo_wr_en` から削除。CRC エラーは tlast でのみ検査される。
+
+```systemverilog
+// 修正後
+assign rx_fifo_wr_en = rx_tvalid && rx_accept
+                     && (rx_b_cnt >= 8'd42)
+                     && (rx_pay_cnt < 7'(PAYLOAD_BYTES))
+                     && !rx_fifo_full;
+```
+
+#### axi4lite_regs.sv — xpm_fifo_async RX カウント修正
+
+**バグ1:** `USE_ADV_FEATURES("0004")` は bit2 (wr_data_count) を有効にするが、
+bit10 (rd_data_count) を有効にしないため `rx_afifo_rd_count` が常に 0 を出力した。
+
+**バグ2:** `RD_DATA_COUNT_WIDTH` 未指定のためデフォルト 1 bit になり、
+64 バイト受信時に `64 mod 2 = 0` → カウント = 0 と読み取られた。
+
+**修正:**
+```systemverilog
+.USE_ADV_FEATURES    ("0400"),  // bit10 = rd_data_count
+.RD_DATA_COUNT_WIDTH (13),      // ceil(log2(4096))+1 = 13
+```
+
+#### hdl/constrs/toe_top.xdc — IOB TRUE 制約削除
+
+**バグ:** `set_property IOB TRUE [get_ports {rmii_txd[*] rmii_tx_en}]` が
+Vivado 2024.2 で `[Place 30-722]` エラーを発生させた。  
+T12 は非 CCIO ピン (`CLOCK_DEDICATED_ROUTE FALSE`) のため、
+クロック信号が IOB フリップフロップに届かず配置不可能だった。
+
+**修正:** IOB TRUE 制約行を削除。
+
+---
+
+## 2026-06-06 — TCP モジュール レビュー・rx_buffer バグ修正
+
+### 背景
+
+UDP 動作確認後、TCP モジュール群に同様のバグがないかレビューを実施。
+
+### レビュー結果
+
+| モジュール | 状態 |
+|-----------|------|
+| tcp_rx_hdr_dec.sv | 修正済み (rev1/rev2 2026-06-03) |
+| tcp_hdr_gen.sv | 修正済み (rev1〜rev3 2026-06-03) |
+| tcp_state_ctrl.sv | tuser バグなし。tx_busy クリア未実装だが tcp_layer 外部非公開のため ARM に影響なし |
+| tx_buffer.sv | xpm_memory_tdpram 使用。FIFO 系バグなし |
+| lfsr_isn.sv | 問題なし |
+| tcp_layer.sv | 問題なし |
+
+### 修正: rx_buffer.sv — FWFT モードへ変更
+
+**バグ:** `READ_MODE("std")` + `FIFO_READ_LATENCY(1)` を使用していた。  
+`axi4lite_regs` のドレイン回路:
+```systemverilog
+assign rx_rd_en      = !rx_rd_empty && !rx_afifo_full;
+assign rx_afifo_din  = rx_rd_data;   // コンビネーショナル接続
+assign rx_afifo_wr_en = rx_rd_en;
+```
+は `empty=0` の時点で `dout` が有効であること (FWFT) を前提とする設計。  
+std モードでは `rd_en` アサート後 1 クロックでデータが出るため、
+`rx_afifo` に誤データ (旧値) が書き込まれ、ARM が受信した全バイトが化けていた。
+
+**修正:**
+```systemverilog
+.READ_MODE        ("fwft"),
+.FIFO_READ_LATENCY(0),
+```
+
+なお `USE_ADV_FEATURES("0000")` のまま `rd_data_count` を接続しているため
+`rd_count` は常に 0 を出力するが、`axi4lite_regs` は `rx_afifo_rd_count` (非同期 FIFO 側)
+を RX_COUNT レジスタに使用するため ARM の動作に影響しない。

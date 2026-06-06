@@ -14,44 +14,48 @@
 //   MDIO is left undriven (tri-state); PHY auto-negotiates via strap pins.
 
 module toe_top #(
-    parameter CLK_HZ = 50_000_000
+    parameter WIN_SIZE = 16'd4096,  // unused (kept for block design compatibility)
+    parameter CLK_HZ   = 50_000_000
 )(
     // ---- RMII (LAN8720 via PMOD JC+JD) ------------------------------------
-    input  logic        ref_clk,      // 50 MHz from LAN8720 OSC (T11)
+    input  wire        ref_clk,      // 50 MHz from LAN8720 OSC (T11)
     output logic [1:0]  rmii_txd,
     output logic        rmii_tx_en,
-    input  logic [1:0]  rmii_rxd,
-    input  logic        rmii_crs_dv,
+    input  wire [1:0]  rmii_rxd,
+    input  wire        rmii_crs_dv,
     output logic        mdc,
     inout  wire         mdio,
 
     // ---- PS reset (active-low, from PS7 FCLKRESETN) ----------------------
-    input  logic        ps_resetn,
+    input  wire        ps_resetn,
 
     // ---- AXI4-Lite slave (from PS7) --------------------------------------
-    input  logic        s_axi_aclk,
-    input  logic        s_axi_aresetn,
+    input  wire        s_axi_aclk,
+    input  wire        s_axi_aresetn,
 
-    input  logic [5:0]  s_axi_awaddr,
-    input  logic        s_axi_awvalid,
+    input  wire [5:0]  s_axi_awaddr,
+    input  wire        s_axi_awvalid,
     output logic        s_axi_awready,
-    input  logic [31:0] s_axi_wdata,
-    input  logic [3:0]  s_axi_wstrb,
-    input  logic        s_axi_wvalid,
+    input  wire [31:0] s_axi_wdata,
+    input  wire [3:0]  s_axi_wstrb,
+    input  wire        s_axi_wvalid,
     output logic        s_axi_wready,
     output logic [1:0]  s_axi_bresp,
     output logic        s_axi_bvalid,
-    input  logic        s_axi_bready,
-    input  logic [5:0]  s_axi_araddr,
-    input  logic        s_axi_arvalid,
+    input  wire        s_axi_bready,
+    input  wire [5:0]  s_axi_araddr,
+    input  wire        s_axi_arvalid,
     output logic        s_axi_arready,
     output logic [31:0] s_axi_rdata,
     output logic [1:0]  s_axi_rresp,
     output logic        s_axi_rvalid,
-    input  logic        s_axi_rready,
+    input  wire        s_axi_rready,
 
     // ---- IRQ to PS -------------------------------------------------------
-    output logic        irq_o
+    output logic        irq_o,
+
+    // ---- LED (kept for block design compatibility) -----------------------
+    output logic [3:0]  led_tri_o
 );
 
 // ---------------------------------------------------------------------------
@@ -218,7 +222,8 @@ toe_engine #(
     .tx_busy       (tx_busy)
 );
 
-assign irq_o = 1'b0;
+assign irq_o     = 1'b0;
+assign led_tri_o = {rst_50_n, ~rx_rd_empty, arp_mac_valid, tx_busy};
 
 endmodule
 `default_nettype wire

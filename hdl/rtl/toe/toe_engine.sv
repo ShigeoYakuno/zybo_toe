@@ -6,47 +6,47 @@ module toe_engine #(
     parameter PAYLOAD_BYTES = 64,
     parameter CLK_HZ        = 50_000_000
 )(
-    input  logic        clk,
-    input  logic        rst_n,
+    input  wire        clk,
+    input  wire        rst_n,
 
     // Config (clk domain, from axi4lite_regs)
-    input  logic [47:0] local_mac,
-    input  logic [47:0] remote_mac,
-    input  logic [31:0] local_ip,
-    input  logic [31:0] remote_ip,
-    input  logic [15:0] local_port,
-    input  logic [15:0] remote_port,
-    input  logic        addr_valid,
+    input  wire [47:0] local_mac,
+    input  wire [47:0] remote_mac,
+    input  wire [31:0] local_ip,
+    input  wire [31:0] remote_ip,
+    input  wire [15:0] local_port,
+    input  wire [15:0] remote_port,
+    input  wire        addr_valid,
 
     // ARM control (2FF-synced, clk domain)
-    input  logic        send_req,
+    input  wire        send_req,
 
     // ARP
-    input  logic        arp_send_req,
+    input  wire        arp_send_req,
     output logic        arp_mac_valid,
     output logic [47:0] arp_mac_o,
 
     // TX data from ARM (clk domain, via async FIFO in axi4lite_regs)
-    input  logic [7:0]  tx_wr_data,
-    input  logic        tx_wr_en,
+    input  wire [7:0]  tx_wr_data,
+    input  wire        tx_wr_en,
     output logic        tx_wr_full,
 
     // RX data to ARM (clk domain, async FIFO in axi4lite_regs)
     output logic [7:0]  rx_rd_data,
-    input  logic        rx_rd_en,
+    input  wire        rx_rd_en,
     output logic        rx_rd_empty,
     output logic [11:0] rx_rd_count,
 
     // RX from MAC (AXI-Stream, no backpressure)
-    input  logic [7:0]  mac_rx_tdata,
-    input  logic        mac_rx_tvalid,
-    input  logic        mac_rx_tlast,
-    input  logic        mac_rx_tuser,
+    input  wire [7:0]  mac_rx_tdata,
+    input  wire        mac_rx_tvalid,
+    input  wire        mac_rx_tlast,
+    input  wire        mac_rx_tuser,
 
     // TX to MAC (AXI-Stream with backpressure)
     output logic [7:0]  mac_tx_tdata,
     output logic        mac_tx_tvalid,
-    input  logic        mac_tx_tready,
+    input  wire        mac_tx_tready,
     output logic        mac_tx_tlast,
 
     // Status

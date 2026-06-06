@@ -37,15 +37,17 @@ module rx_buffer (
 
 // xpm_fifo_sync: Xilinx同期FIFOプリミティブ
 // - 4096バイト深さのブロックRAMFIFO
-// - 標準読み出しモード（FWFTではない: 1クロック読み出し遅延あり）
+// - FWFTモード（latency=0）: axi4lite_regsのドレイン回路がコンビネーショナルな
+//   assign rx_afifo_din=rx_rd_data で動作するため、empty=0の時点でdoutが有効な
+//   FWFTモードが必須。std モードでは rd_en 後1クロック遅延するため誤データが転送される。
 // - RD_DATA_COUNT_WIDTH=12: 4096バイトを12ビットでカウント
 xpm_fifo_sync #(
     .FIFO_MEMORY_TYPE ("block"),        // ブロックRAMを使用
     .FIFO_WRITE_DEPTH (4096),           // FIFO深さ: 4096バイト（4KB）
     .WRITE_DATA_WIDTH (8),              // 書き込みデータ幅: 8ビット
     .READ_DATA_WIDTH  (8),              // 読み出しデータ幅: 8ビット
-    .READ_MODE        ("std"),          // 標準読み出しモード（1クロック遅延）
-    .FIFO_READ_LATENCY(1),              // 読み出し遅延: 1クロック
+    .READ_MODE        ("fwft"),          // FWFT読み出しモード（遅延なし: axi4lite_regs ドレイン前提）
+    .FIFO_READ_LATENCY(0),              // 読み出し遅延: 0クロック（FWFTはlatency=0が必須）
     .RD_DATA_COUNT_WIDTH(12),           // 読み出しデータカウント幅: 12ビット
     .WR_DATA_COUNT_WIDTH(12),           // 書き込みデータカウント幅: 12ビット
     .USE_ADV_FEATURES ("0000"),         // 高度な機能は未使用
