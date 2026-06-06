@@ -1,7 +1,7 @@
-# ZYBO Z7-20 TCP Offload Engine (TOE)
+# ZYBO Z7-20 TOE (TCP/UDP Offload Engine)
 
-ZYBO Z7-20 の PL (FPGA) に TCP/IP スタックを実装した TCP Offload Engine です。  
-PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送受信を行えます。
+ZYBO Z7-20 の PL (FPGA) に Ethernet フレーム処理を実装したオフロードエンジンです。  
+現在は UDP 通信 (64 バイトペイロード) が動作し、PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でセンサデータ送受信を行えます。
 
 ---
 
@@ -27,13 +27,10 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
       |                                   | ARP Request/Reply TX
       | EtherType 0x0800                  |
       v                             [TX Arbiter] ── [rmii_mac TX]
-[tcp_layer]                               ^
-  ├─ tcp_rx_hdr_dec                       |
-  ├─ tcp_hdr_gen ────────────────────────┘
-  ├─ tcp_state_ctrl  (8-state FSM, Active Open)
-  ├─ tx_buffer  (8 KB 循環バッファ、再送対応)
-  ├─ rx_buffer  (4 KB FIFO)
-  └─ lfsr_isn   (ISN 生成)
+[udp_layer]  ←─────────────────────────┘
+  ├─ TX staging buffer (64 byte)
+  ├─ UDP/IP/Eth ヘッダ生成 (組み合わせ回路)
+  └─ RX FIFO (xpm_fifo_sync, 512 深)
       |
 [axi4lite_regs]  ← xpm_fifo_async CDC
       | AXI4-Lite
@@ -57,7 +54,8 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
 │   └── app_component/
 │       └── src/          # ベアメタル C アプリ (UART コマンドシェル)
 ├── python/
-│   ├── tcp_server.py     # PC 側 TCP サーバ (動作確認用)
+│   ├── udp_server.py     # PC 側 UDP 送受信テストツール
+│   ├── tcp_server.py     # PC 側 TCP サーバ (旧実装参考用)
 │   └── read_regs.py      # レジスタ読み出しスクリプト
 ├── bitstream/
 │   ├── toe_nn2.bit       # ビットストリーム (すぐに書き込んで試せる)
@@ -74,7 +72,7 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
 
 ## 開発状況
 
-> **現在 TCP 接続確立に取り組み中です。ARP は動作確認済み。**
+> **UDP 通信を実装中。ARP・UDP TX/RX の合成・テストを継続中。**
 
 | 機能 | 状態 | 備考 |
 |------|------|------|
@@ -84,29 +82,32 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
 | FPGA TX 物理送出 | ✅ | rmii_tx_en sticky (LD0) |
 | FPGA RX 受信 | ✅ | CRC 正常フレーム受信 (LD1, LD2) |
 | ARP 解決 | ✅ | arp_mac_valid sticky (LD3) |
-| TCP SYN 送出 (MAC 到達) | ✅ | mac_tx_tvalid sticky 確認済み |
-| PC が TCP SYN を受信 | ⚠️ | Wireshark で未確認 (診断中) |
-| TCP ESTABLISHED | ❌ | 未達成 |
+| UDP TX (FPGA→PC) | 🔄 | udp_layer 実装済み・合成テスト中 |
+| UDP RX (PC→FPGA) | 🔄 | xpm_fifo_sync 実装済み・テスト中 |
+| TCP ESTABLISHED | ❌ | 多数バグ修正を経て未達成 → UDP に切替 |
 
+### TCP が通らなかった経緯
 
+複数のバグを修正したにもかかわらず TCP 接続確立に至らなかったため、UDP による実装に切り替えました。
+詳細は [docs/analysis.md](docs/analysis.md) と [docs/blog.md](docs/blog.md) を参照。
 
-### 残課題・次のステップ
-
-- Wireshark フィルタ `ether src 02:00:00:00:00:01` でキャプチャ NIC (イーサネット 3) を確認
-- `python/tcp_server.py` を事前に起動してから TCP 接続テスト
-- TCP SYN が PC に届くことを確認 → ESTABLISHED 達成へ
-
-**TCP 通信確立まであきらめずに開発を継続します。**
+**TCP 通信確立まであきらめずに開発を継続します。UDP で通信経路を確認後、TCP を再挑戦予定。**
 
 ---
 
-## すぐに試す (ビットストリームを使う場合)
+## すぐに試す
 
 1. ZYBO Z7-20 に Waveshare LAN8720 を PMOD JC/JD に接続する
-2. `bitstream/toe_nn2.bit` を ZYBO に書き込む
+2. Vivado でビルドしたビットストリームを ZYBO に書き込む
 3. `bitstream/toe_nn2.xsa` から Vitis プラットフォームを作成し、`vitis/app_component/src/` をビルド・実行する
 4. UART を開き、`help` コマンドで操作を確認する
-5. PC 側で `python/tcp_server.py` を起動して動作確認する
+5. PC 側で `python/udp_server.py` を起動して UDP 受信を確認する:
+
+```
+python python/udp_server.py
+```
+
+6. UART から `arp` → `arpwatch` で ARP 解決後、`send64 hello` で UDP パケット送信
 
 ---
 
@@ -129,8 +130,8 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
 
 | オフセット | 名前 | R/W | 説明 |
 |-----------|------|-----|------|
-| 0x00 | CTRL | R/W | [0]=connect_req, [1]=disconnect_req, [2]=arp_req |
-| 0x04 | STATUS | R | [3:0]=tcp_state, [4]=irq_pending, [5]=arp_mac_valid |
+| 0x00 | CTRL | R/W | [0]=send_req, [2]=arp_req |
+| 0x04 | STATUS | R | [0]=tx_busy, [5]=arp_mac_valid |
 | 0x08 | LOCAL_MAC_HI | R/W | local_mac[47:32] |
 | 0x0C | LOCAL_MAC_LO | R/W | local_mac[31:0] |
 | 0x10 | REMOTE_MAC_HI | R/W | remote_mac[47:32] |
@@ -143,11 +144,9 @@ PS (ARM Cortex-A9) から AXI4-Lite レジスタ経由でシンプルに TCP 送
 | 0x2C | RX_DATA | R | RX FIFO からバイト読み出し |
 | 0x30 | RX_COUNT | R | RX FIFO 有効バイト数 [11:0] |
 
-TCP ステート値 (STATUS[3:0]): 0=CLOSED, 1=SYN_SENT, 2=ESTABLISHED, 3=FIN_WAIT_1, 4=FIN_WAIT_2, 5=TIME_WAIT, 6=CLOSE_WAIT, 7=LAST_ACK
-
 ---
 
-## ファームウェア使用例
+## ファームウェア使用例 (UDP)
 
 ```c
 #define TOE_BASE 0x40000000UL
@@ -155,29 +154,33 @@ TCP ステート値 (STATUS[3:0]): 0=CLOSED, 1=SYN_SENT, 2=ESTABLISHED, 3=FIN_WA
 // IP/ポート設定
 Xil_Out32(TOE_BASE + 0x18, 0xC0A80164);  // LOCAL_IP  192.168.1.100
 Xil_Out32(TOE_BASE + 0x1C, 0xC0A80114);  // REMOTE_IP 192.168.1.20
-Xil_Out32(TOE_BASE + 0x20, 5000);         // LOCAL_PORT
-Xil_Out32(TOE_BASE + 0x24, 5000);         // REMOTE_PORT
+Xil_Out32(TOE_BASE + 0x20, 12345);        // LOCAL_PORT
+Xil_Out32(TOE_BASE + 0x24, 50000);        // REMOTE_PORT
 
-// ARP → TCP 接続
+// ARP 解決
 Xil_Out32(TOE_BASE + 0x00, 0x4);          // arp_req
-// ... ARP 完了待ち ...
-Xil_Out32(TOE_BASE + 0x00, 0x1);          // connect_req
-// ... STATUS[3:0] == 2 (ESTABLISHED) 待ち ...
+// ... STATUS[5] (arp_mac_valid) == 1 待ち ...
 
-// データ送受信
-Xil_Out32(TOE_BASE + 0x28, 'H');          // TX
-uint8_t b = Xil_In32(TOE_BASE + 0x2C);   // RX
+// 64バイト UDP 送信
+for (int i = 0; i < 64; i++)
+    Xil_Out32(TOE_BASE + 0x28, sensor_data[i]);
+Xil_Out32(TOE_BASE + 0x00, 0x1);          // send_req (rising edge)
+
+// UDP 受信
+uint32_t cnt = Xil_In32(TOE_BASE + 0x30) & 0xFFF;
+for (uint32_t i = 0; i < cnt; i++)
+    uint8_t b = Xil_In32(TOE_BASE + 0x2C);
 ```
 
 ---
 
 ## 既知の制限事項
 
-- 単一 TCP 接続のみ (Active Open / クライアント動作)
+- UDP 64 バイト固定ペイロードのみ
 - IPv6 非対応、IP フラグメント非対応
-- ウィンドウサイズ固定 4096 バイト
+- 単一エンドポイント (1対1通信のみ)
 - MDIO 制御未実装 (PHY はストラップ設定で auto-negotiation)
-- RX バッファ満杯時はペイロードをドロップ
+- RX FIFO 満杯時はペイロードをドロップ
 
 ---
 

@@ -14,8 +14,7 @@
 //   MDIO is left undriven (tri-state); PHY auto-negotiates via strap pins.
 
 module toe_top #(
-    parameter WIN_SIZE = 16'd4096,
-    parameter CLK_HZ   = 50_000_000
+    parameter CLK_HZ = 50_000_000
 )(
     // ---- RMII (LAN8720 via PMOD JC+JD) ------------------------------------
     input  logic        ref_clk,      // 50 MHz from LAN8720 OSC (T11)
@@ -130,14 +129,13 @@ logic [47:0] local_mac,  remote_mac;
 logic [31:0] local_ip,   remote_ip;
 logic [15:0] local_port, remote_port;
 logic        addr_valid;
-logic        connect_req, disconnect_req, arp_send_req;
+logic        send_req, arp_send_req;
+logic        tx_busy, arp_mac_valid;
 logic [7:0]  tx_wr_data;
 logic        tx_wr_en, tx_wr_full;
 logic [7:0]  rx_rd_data;
 logic        rx_rd_en, rx_rd_empty;
 logic [11:0] rx_rd_count;
-logic [3:0]  tcp_state;
-logic        irq_50;
 
 axi4lite_regs u_regs (
     .s_axi_aclk    (s_axi_aclk),
@@ -167,63 +165,60 @@ axi4lite_regs u_regs (
     .remote_ip     (remote_ip),
     .local_port    (local_port),
     .remote_port   (remote_port),
-    .addr_valid    (addr_valid),
-    .connect_req   (connect_req),
-    .disconnect_req(disconnect_req),
-    .arp_send_req  (arp_send_req),
-    .tx_wr_data    (tx_wr_data),
-    .tx_wr_en      (tx_wr_en),
-    .tx_wr_full    (tx_wr_full),
-    .rx_rd_data    (rx_rd_data),
-    .rx_rd_en_out  (),
-    .rx_rd_en      (rx_rd_en),
-    .rx_rd_empty   (rx_rd_empty),
-    .rx_rd_count   (rx_rd_count),
-    .tcp_state_50  (tcp_state),
-    .irq_50        (irq_50)
+    .addr_valid       (addr_valid),
+    .send_req         (send_req),
+    .arp_send_req     (arp_send_req),
+    .tx_wr_data       (tx_wr_data),
+    .tx_wr_en         (tx_wr_en),
+    .tx_wr_full       (tx_wr_full),
+    .rx_rd_data       (rx_rd_data),
+    .rx_rd_en_out     (),
+    .rx_rd_en         (rx_rd_en),
+    .rx_rd_empty      (rx_rd_empty),
+    .rx_rd_count      (rx_rd_count),
+    .tx_busy_50       (tx_busy),
+    .arp_mac_valid_50 (arp_mac_valid)
 );
 
 // ---------------------------------------------------------------------------
 // TOE engine
 // ---------------------------------------------------------------------------
 toe_engine #(
-    .WIN_SIZE (WIN_SIZE),
-    .CLK_HZ   (CLK_HZ)
+    .PAYLOAD_BYTES (64),
+    .CLK_HZ        (CLK_HZ)
 ) u_engine (
-    .clk            (clk_50),
-    .rst_n          (rst_50_n),
-    .local_mac      (local_mac),
-    .remote_mac     (remote_mac),
-    .local_ip       (local_ip),
-    .remote_ip      (remote_ip),
-    .local_port     (local_port),
-    .remote_port    (remote_port),
-    .addr_valid     (addr_valid),
-    .connect_req    (connect_req),
-    .disconnect_req (disconnect_req),
-    .arp_send_req   (arp_send_req),
-    .arp_mac_valid  (),
-    .arp_mac_o      (),
-    .tx_wr_data     (tx_wr_data),
-    .tx_wr_en       (tx_wr_en),
-    .tx_wr_full     (tx_wr_full),
-    .rx_rd_data     (rx_rd_data),
-    .rx_rd_en       (rx_rd_en),
-    .rx_rd_empty    (rx_rd_empty),
-    .rx_rd_count    (rx_rd_count),
-    .mac_rx_tdata   (mac_rx_tdata),
-    .mac_rx_tvalid  (mac_rx_tvalid),
-    .mac_rx_tlast   (mac_rx_tlast),
-    .mac_rx_tuser   (mac_rx_tuser),
-    .mac_tx_tdata   (mac_tx_tdata),
-    .mac_tx_tvalid  (mac_tx_tvalid),
-    .mac_tx_tready  (mac_tx_tready),
-    .mac_tx_tlast   (mac_tx_tlast),
-    .tcp_state      (tcp_state),
-    .irq            (irq_50)
+    .clk           (clk_50),
+    .rst_n         (rst_50_n),
+    .local_mac     (local_mac),
+    .remote_mac    (remote_mac),
+    .local_ip      (local_ip),
+    .remote_ip     (remote_ip),
+    .local_port    (local_port),
+    .remote_port   (remote_port),
+    .addr_valid    (addr_valid),
+    .send_req      (send_req),
+    .arp_send_req  (arp_send_req),
+    .arp_mac_valid (arp_mac_valid),
+    .arp_mac_o     (),
+    .tx_wr_data    (tx_wr_data),
+    .tx_wr_en      (tx_wr_en),
+    .tx_wr_full    (tx_wr_full),
+    .rx_rd_data    (rx_rd_data),
+    .rx_rd_en      (rx_rd_en),
+    .rx_rd_empty   (rx_rd_empty),
+    .rx_rd_count   (rx_rd_count),
+    .mac_rx_tdata  (mac_rx_tdata),
+    .mac_rx_tvalid (mac_rx_tvalid),
+    .mac_rx_tlast  (mac_rx_tlast),
+    .mac_rx_tuser  (mac_rx_tuser),
+    .mac_tx_tdata  (mac_tx_tdata),
+    .mac_tx_tvalid (mac_tx_tvalid),
+    .mac_tx_tready (mac_tx_tready),
+    .mac_tx_tlast  (mac_tx_tlast),
+    .tx_busy       (tx_busy)
 );
 
-assign irq_o = irq_50;
+assign irq_o = 1'b0;
 
 endmodule
 `default_nettype wire

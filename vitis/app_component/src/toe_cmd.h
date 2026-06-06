@@ -1,5 +1,5 @@
 /*
- * toe_cmd.h  –  TOEインタラクティブシェル ヘッダ
+ * toe_cmd.h  –  UDP TOEインタラクティブシェル ヘッダ
  */
 #ifndef TOE_CMD_H
 #define TOE_CMD_H
@@ -11,8 +11,8 @@
  * ===================================================================== */
 #define TOE_BASE        0x40000000UL
 
-#define REG_CTRL        0x00  /* [0]=connect [1]=disconnect [2]=arp_req */
-#define REG_STATUS      0x04  /* [3:0]=tcp_state [4]=irq [5]=arp_valid */
+#define REG_CTRL        0x00  /* [0]=send_req [2]=arp_req */
+#define REG_STATUS      0x04  /* [0]=tx_busy [5]=arp_mac_valid */
 #define REG_LMAC_HI     0x08  /* local_mac[47:32] */
 #define REG_LMAC_LO     0x0C  /* local_mac[31:0]  */
 #define REG_RMAC_HI     0x10  /* remote_mac[47:32] */
@@ -24,6 +24,10 @@
 #define REG_TX_DATA     0x28  /* TXバッファへ1バイトpush */
 #define REG_RX_DATA     0x2C  /* RXバッファから1バイトpop */
 #define REG_RX_COUNT    0x30  /* RXバッファ残バイト数 [11:0] */
+
+/* STATUS ビット定義 */
+#define STATUS_TX_BUSY   (1U << 0)
+#define STATUS_ARP_VALID (1U << 5)
 
 /* =====================================================================
  * ネットワーク設定  (環境に合わせて変更)
@@ -41,17 +45,8 @@
 #define REMOTE_IP       0xC0A80114UL   /* 192.168.1.20  */
 #define REMOTE_PORT     50000U
 
-/* =====================================================================
- * TCP ステート名
- * ===================================================================== */
-#define ST_CLOSED       0
-#define ST_SYN_SENT     1
-#define ST_ESTABLISHED  2
-#define ST_FIN_WAIT_1   3
-#define ST_FIN_WAIT_2   4
-#define ST_TIME_WAIT    5
-#define ST_CLOSE_WAIT   6
-#define ST_LAST_ACK     7
+/* UDP ペイロードサイズ */
+#define UDP_PAYLOAD_BYTES  64
 
 /* =====================================================================
  * API

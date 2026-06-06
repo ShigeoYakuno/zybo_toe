@@ -1,28 +1,20 @@
 `default_nettype none
-// AXI4-Lite register slave + CDC bridge.
+// AXI4-Lite register slave + CDC bridge (UDP version).
 //
 // Register map (32-bit, word-aligned):
-//   0x00  CTRL       [0]=connect_req  [1]=disconnect_req  [2]=arp_req  W/R
-//   0x04  STATUS     [3:0]=tcp_state  [4]=irq_pending     [5]=arp_mac_valid  R
-//   0x08  LOCAL_MAC_HI  [15:0] = local_mac[47:32]         W/R
-//   0x0C  LOCAL_MAC_LO  [31:0] = local_mac[31:0]          W/R
-//   0x10  REMOTE_MAC_HI [15:0] = remote_mac[47:32]        W/R
-//   0x14  REMOTE_MAC_LO [31:0] = remote_mac[31:0]         W/R
-//   0x18  LOCAL_IP      [31:0]                             W/R
-//   0x1C  REMOTE_IP     [31:0]                             W/R
-//   0x20  LOCAL_PORT    [15:0]                             W/R
-//   0x24  REMOTE_PORT   [15:0]                             W/R
+//   0x00  CTRL       [0]=send_req  [2]=arp_req  W/R
+//   0x04  STATUS     [0]=tx_busy  [5]=arp_mac_valid  R
+//   0x08  LOCAL_MAC_HI  [15:0] = local_mac[47:32]   W/R
+//   0x0C  LOCAL_MAC_LO  [31:0] = local_mac[31:0]    W/R
+//   0x10  REMOTE_MAC_HI [15:0] = remote_mac[47:32]  W/R
+//   0x14  REMOTE_MAC_LO [31:0] = remote_mac[31:0]   W/R
+//   0x18  LOCAL_IP      [31:0]                       W/R
+//   0x1C  REMOTE_IP     [31:0]                       W/R
+//   0x20  LOCAL_PORT    [15:0]                       W/R
+//   0x24  REMOTE_PORT   [15:0]                       W/R
 //   0x28  TX_DATA    [7:0] write = push byte into TX FIFO  W
 //   0x2C  RX_DATA    [7:0] read  = pop byte from RX FIFO   R
 //   0x30  RX_COUNT   [11:0] bytes available in RX FIFO     R
-//
-// CDC:
-//   AXI domain (s_axi_aclk) → clk_50 domain:
-//     - Single-bit control (connect/disconnect/arp): 2FF synchroniser
-//     - TX data: xpm_fifo_async (8-bit, 2048-deep)
-//   clk_50 → AXI domain:
-//     - tcp_state, irq_pending: 2FF synchroniser
-//     - RX data: xpm_fifo_async (8-bit, 4096-deep mirrors rx_buffer read side)
 
 module axi4lite_regs #(
     parameter AXI_ADDR_W = 6   // 64-byte address space
@@ -65,8 +57,7 @@ module axi4lite_regs #(
     output logic [15:0] remote_port,
     output logic        addr_valid,
 
-    output logic        connect_req,
-    output logic        disconnect_req,
+    output logic        send_req,
     output logic        arp_send_req,
 
     // ---- TX data FIFO (to tx_buffer write port, clk_50 domain) ----------
@@ -82,14 +73,14 @@ module axi4lite_regs #(
     input  logic [11:0] rx_rd_count,
 
     // ---- Status from clk_50 domain (to AXI domain via 2FF sync) ---------
-    input  logic [3:0]  tcp_state_50,
-    input  logic        irq_50
+    input  logic        tx_busy_50,
+    input  logic        arp_mac_valid_50
 );
 
 // ---------------------------------------------------------------------------
 // AXI-domain registers
 // ---------------------------------------------------------------------------
-logic [31:0] reg_ctrl      = '0;   // [0]=conn [1]=disc [2]=arp
+logic [31:0] reg_ctrl      = '0;   // [0]=send_req [2]=arp_req
 logic [15:0] reg_lmac_hi   = '0;
 logic [31:0] reg_lmac_lo   = '0;
 logic [15:0] reg_rmac_hi   = '0;
@@ -99,47 +90,36 @@ logic [31:0] reg_rip       = '0;
 logic [15:0] reg_lport     = '0;
 logic [15:0] reg_rport     = '0;
 
-logic        irq_pending_axi = 1'b0;
-
 // 2FF sync: clk_50 → axi_clk
-logic [3:0]  tcp_state_s1, tcp_state_axi;
-logic        irq_s1, irq_axi;
-logic        irq_sticky = 1'b0;
+logic tx_busy_s1,   tx_busy_axi;
+logic arpmac_s1,    arp_mac_valid_axi;
 
 always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
     if (!s_axi_aresetn) begin
-        tcp_state_s1  <= '0; tcp_state_axi <= '0;
-        irq_s1        <= '0; irq_axi       <= '0;
-        irq_sticky    <= '0;
+        tx_busy_s1 <= '0; tx_busy_axi      <= '0;
+        arpmac_s1  <= '0; arp_mac_valid_axi <= '0;
     end else begin
-        tcp_state_s1  <= tcp_state_50;  tcp_state_axi <= tcp_state_s1;
-        irq_s1        <= irq_50;        irq_axi       <= irq_s1;
-        if (irq_axi) irq_sticky <= 1'b1;
-        // Clear on STATUS read (handled in read logic below)
+        tx_busy_s1 <= tx_busy_50;       tx_busy_axi      <= tx_busy_s1;
+        arpmac_s1  <= arp_mac_valid_50; arp_mac_valid_axi <= arpmac_s1;
     end
 end
 
 // 2FF sync: axi_clk → clk_50 (single-bit controls)
-logic conn_s1,   conn_50;
-logic disc_s1,   disc_50;
-logic arp_s1,    arp_50;
-logic arpmac_s1;
+logic send_s1, send_50;
+logic arp_s1,  arp_50;
 
 always_ff @(posedge clk_50 or negedge rst_50_n) begin
     if (!rst_50_n) begin
-        conn_s1  <= '0; conn_50  <= '0;
-        disc_s1  <= '0; disc_50  <= '0;
-        arp_s1   <= '0; arp_50   <= '0;
+        send_s1 <= '0; send_50 <= '0;
+        arp_s1  <= '0; arp_50  <= '0;
     end else begin
-        conn_s1  <= reg_ctrl[0]; conn_50  <= conn_s1;
-        disc_s1  <= reg_ctrl[1]; disc_50  <= disc_s1;
-        arp_s1   <= reg_ctrl[2]; arp_50   <= arp_s1;
+        send_s1 <= reg_ctrl[0]; send_50 <= send_s1;
+        arp_s1  <= reg_ctrl[2]; arp_50  <= arp_s1;
     end
 end
 
-assign connect_req    = conn_50;
-assign disconnect_req = disc_50;
-assign arp_send_req   = arp_50;
+assign send_req     = send_50;
+assign arp_send_req = arp_50;
 
 // Latch address registers into clk_50 domain (quasi-static, 2FF sync)
 // We sync individual bits — these only change before connection.
@@ -327,7 +307,6 @@ always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
         reg_rmac_hi   <= '0; reg_rmac_lo <= '0;
         reg_lip       <= '0; reg_rip     <= '0;
         reg_lport     <= '0; reg_rport   <= '0;
-        irq_sticky    <= 1'b0;
     end else begin
         // Deassert single-cycle strobes
         if (s_axi_bvalid && s_axi_bready) s_axi_bvalid <= 1'b0;
@@ -370,10 +349,7 @@ always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
             s_axi_rvalid <= 1'b1;
             case (s_axi_araddr)
                 6'h00: s_axi_rdata <= reg_ctrl;
-                6'h04: begin
-                    s_axi_rdata <= {26'h0, irq_sticky, tcp_state_axi};
-                    irq_sticky  <= 1'b0;  // clear on read
-                end
+                6'h04: s_axi_rdata <= {26'h0, arp_mac_valid_axi, 4'h0, tx_busy_axi};
                 6'h08: s_axi_rdata <= {16'h0, reg_lmac_hi};
                 6'h0C: s_axi_rdata <= reg_lmac_lo;
                 6'h10: s_axi_rdata <= {16'h0, reg_rmac_hi};
@@ -388,8 +364,6 @@ always_ff @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
             endcase
         end
 
-        // Latch IRQ from clk_50
-        if (irq_axi) irq_sticky <= 1'b1;
     end
 end
 
