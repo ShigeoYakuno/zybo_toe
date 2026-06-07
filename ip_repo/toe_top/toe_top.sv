@@ -94,7 +94,63 @@ always_ff @(posedge clk_50 or negedge rst_50_n) begin
             mdc_cnt <= mdc_cnt + 1'b1;
     end
 end
-assign mdio = 1'bz;   // leave MDIO tristated; PHY uses straps
+// ---------------------------------------------------------------------------
+// MDIO初期化: LAN8720を100Mbps Full-duplexに強制設定
+// ★元に戻す場合: 次の1行をコメントアウトする
+//`define MDIO_FORCE_100FD
+// ---------------------------------------------------------------------------
+`ifdef MDIO_FORCE_100FD
+// PHYアドレス: Waveshare LAN8720ボードは通常1 (RXER/PHYAD0ストラップ依存)
+// 動作しない場合は 5'd0 に変更して試すこと
+localparam [4:0]  MDIO_PHY_ADDR  = 5'd1;
+localparam [4:0]  MDIO_REG_BASIC = 5'd0;      // Basic Control Register
+// 0x2100: bit13=100Mbps, bit12=0(AutoNeg OFF), bit8=Full-duplex
+localparam [15:0] MDIO_CTRL_VAL  = 16'h2100;
+
+// 64ビットMDIOライトフレーム (MSBファースト送出)
+// [PRE×32(1)][ST=01][OP=01][PHYAD×5][REGAD×5][TA=10][DATA×16]
+localparam [63:0] MDIO_FRAME = {
+    32'hFFFF_FFFF,  // Preamble (32×1)
+    2'b01,          // ST (start of frame)
+    2'b01,          // OP (write)
+    MDIO_PHY_ADDR,  // PHYAD [4:0]
+    MDIO_REG_BASIC, // REGAD [4:0]
+    2'b10,          // TA (turnaround)
+    MDIO_CTRL_VAL   // DATA [15:0]
+};
+
+logic [5:0] mdio_bit       = 6'd63; // 63→0 の順に送出
+logic       mdio_init_done = 1'b0;
+logic       mdio_drv       = 1'b1;  // 1=ドライブ中, 0=Hi-Z解放
+logic       mdio_val       = 1'b1;  // MDIO出力値 (初期値=1: プリアンブル相当)
+
+// MDC立下り (mdc_cnt==24 かつ mdc==1 → 次サイクルで mdc が0) のタイミングで
+// MDIOビットを更新する。LAN8720はMDC立上りでサンプリングするため、
+// 立下り直後に変更すれば25クロック(=1μs)のセットアップ時間を確保できる。
+always_ff @(posedge clk_50 or negedge rst_50_n) begin
+    if (!rst_50_n) begin
+        mdio_bit       <= 6'd63;
+        mdio_init_done <= 1'b0;
+        mdio_drv       <= 1'b1;
+        mdio_val       <= 1'b1;
+    end else if (!mdio_init_done) begin
+        if (mdc_cnt == 6'd24 && mdc == 1'b1) begin  // MDC立下りエッジ
+            mdio_val <= MDIO_FRAME[mdio_bit];
+            if (mdio_bit == 6'd0) begin
+                mdio_init_done <= 1'b1;
+                mdio_drv       <= 1'b0;  // 完了後はHi-Zに解放
+            end else
+                mdio_bit <= mdio_bit - 1'b1;
+        end
+    end
+end
+
+// 初期化中はMDIO出力ドライブ、完了後はHi-Z
+assign mdio = mdio_drv ? mdio_val : 1'bz;
+`else
+// MDIO Hi-Z: PHYはストラップ設定(AutoNeg)で動作
+assign mdio = 1'bz;
+`endif
 
 // ---------------------------------------------------------------------------
 // RMII MAC

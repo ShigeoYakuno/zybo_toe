@@ -26,10 +26,15 @@ set(USER_UNDEFINED_SYMBOLS
 # Example 3: Adding ${CMAKE_SOURCE_DIR}/data/include to add data/include from this project.
 
 set(USER_INCLUDE_DIRECTORIES
+# AXI IIC ドライバヘッダ (プラットフォーム再生成後は BSP に自動追加されるため削除可)
+"C:/Xilinx/Vitis/2024.2/data/embeddedsw/XilinxProcessorIPLib/drivers/iic_v3_12/src"
 )
 set(USER_COMPILE_SOURCES
 "main.c"
 "toe_cmd.c"
+"iic_sens.c"
+# AXI IIC ドライバ本体 (プラットフォーム再生成後は BSP に含まれるため削除可)
+"C:/Xilinx/Vitis/2024.2/data/embeddedsw/XilinxProcessorIPLib/drivers/iic_v3_12/src/xiic_l.c"
 )
 
 # -----------------------------------------

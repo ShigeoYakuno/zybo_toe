@@ -1,9 +1,19 @@
 `default_nettype none
 // 改版履歴:
+//   rev6 2026-06-07  send_req をエッジ検出に変更:
+//                    send_req がレベルセンシティブだと ARP Reply 受信直後に
+//                    ARP_RESOLVED→ARP_WAIT_REPLY に1クロック戻ってしまい
+//                    target_mac_valid が20nsしかHighにならず ARM が検出できなかった。
+//                    立ち上がりエッジのみでトリガすることで ARP_RESOLVED を保持する。
+//   rev5 2026-06-06  rx_is_request/rx_is_reply から !rx_bad を削除:
+//                    mii_mac_rxはtlast以外の全バイトでtuser=1を出すためrx_badは常に1になり
+//                    rx_is_reply/rx_is_requestが常にFALSEでARP Reply/Requestを認識できなかった。
+//                    FSMが!rx_tuser(tlast時)でCRCを判定しているため rx_bad は不要。
 //   rev4 2026-06-03  send_req受付条件をARP_IDLEのみ→ARP_IDLE||ARP_RESOLVEDに拡張:
 //                    ARP解決後に再ARP要求を出してもHWが無視していた（2回目以降Wiresharkに出ない）バグを修正
-//   rev3 2026-06-01  rx_tuser チェックを !rx_bad から !rx_tuser(tlast時)に変更: mii_mac_rxがtlast以外で常にtuser=1を出すため全フレーム棄却されていた
-//   rev2 2026-06-01  is_reply_pkt の二重宣言を修正: rev1でラッチ追加時に旧宣言を削除し忘れ、Vivado合成エラーの原因になっていた
+//   rev3 2026-06-01  FSM受付条件に!rx_tuser(tlast時)ガードを追加:
+//                    rx_is_request/rx_is_replyの!rx_bad削除は未完了のままだった(rev5で完成)
+//   rev2 2026-06-01  is_reply_pkt の二重宣言を修正
 //   rev1 2026-05-31  is_reply_pkt をラッチ化: ARP Replyがバイト1以降でRequest内容に化けるバグを修正
 //
 // ARPエンジン
@@ -36,7 +46,7 @@ module arp_engine #(
     input  wire [31:0] target_ip,   // 解決したい相手のIPアドレス
 
     // ---- ARP Requestトリガ (PS→FPGA CDC済み) ----------------------------------
-    input  wire        send_req,          // 1クロック以上Highでトリガ
+    input  wire        send_req,          // 立ち上がりエッジでトリガ
     output logic       target_mac_valid,  // 解決完了フラグ
     output logic [47:0] target_mac_o,     // 解決したMACアドレス
 
@@ -62,7 +72,6 @@ logic [47:0] rx_sha;          // 受信フレームの送信元MACアドレス
 logic [31:0] rx_spa;          // 受信フレームの送信元IPアドレス
 logic [31:0] rx_tpa;          // 受信フレームの宛先IPアドレス
 logic [15:0] rx_oper;         // ARP操作コード (0x0001=Request, 0x0002=Reply)
-logic        rx_bad;          // CRCエラーフラグ (フレーム内で一度でも1なら保持)
 
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -71,11 +80,8 @@ always_ff @(posedge clk or negedge rst_n) begin
         rx_spa  <= '0;
         rx_tpa  <= '0;
         rx_oper <= '0;
-        rx_bad  <= 1'b0;
     end else begin
         if (rx_tvalid) begin
-            if (rx_tuser) rx_bad <= 1'b1; // CRCエラーをラッチ
-
             // バイト位置に応じてフィールドを取り込む
             case (rx_idx)
                 // Etherヘッダの送信元MAC (バイト6-11) ← 後でARP SHAで上書き
@@ -109,9 +115,7 @@ always_ff @(posedge clk or negedge rst_n) begin
             endcase
 
             if (rx_tlast) begin
-                // フレーム終端: インデックスとエラーフラグをリセット
                 rx_idx <= '0;
-                rx_bad <= 1'b0;
             end else if (rx_idx < 6'd63)
                 rx_idx <= rx_idx + 1'b1;
         end
@@ -157,8 +161,20 @@ end
 // 受信フレームの種別判定 (rx_tlast時点の登録値で評価)
 logic rx_is_request; // 自分宛のARP Request
 logic rx_is_reply;   // target_ip発のARP Reply
-assign rx_is_request = (rx_oper == 16'h0001) && (rx_tpa == local_ip)  && !rx_bad;
-assign rx_is_reply   = (rx_oper == 16'h0002) && (rx_spa == target_ip) && !rx_bad;
+// !rx_bad は不要: FSMの受付ガード(rx_tvalid&&rx_tlast&&!rx_tuser)がCRC判定を担当する。
+// rx_badはtlast以外の全バイトでtuser=1のため常に1になりここに含めると永遠にFALSEになる。
+assign rx_is_request = (rx_oper == 16'h0001) && (rx_tpa == local_ip);
+assign rx_is_reply   = (rx_oper == 16'h0002) && (rx_spa == target_ip);
+
+// send_req 立ち上がりエッジ検出
+// レベルセンシティブだと ARP Reply 受信後も send_req=HIGH のままで
+// ARP_RESOLVED→ARP_WAIT_REPLY に即リセットされ target_mac_valid が 20ns しか出ない
+logic send_req_prev = 1'b0;
+always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) send_req_prev <= 1'b0;
+    else        send_req_prev <= send_req;
+end
+wire send_req_rise = send_req && !send_req_prev;
 
 // 送信保留フラグ
 logic do_request = 1'b0; // ARP Request送信要求
@@ -196,9 +212,9 @@ always_ff @(posedge clk or negedge rst_n) begin
             end
         end
 
-        // PS→FPGA: ARP Request送信トリガ (IDLE / RESOLVED 両方から受け付け)
-        // ARP_RESOLVED後も再送できるよう条件を拡張
-        if (send_req && (arp_state == ARP_IDLE || arp_state == ARP_RESOLVED)) begin
+        // PS→FPGA: ARP Request送信トリガ (立ち上がりエッジのみ)
+        // IDLE / RESOLVED 両方から受け付け (再ARP対応)
+        if (send_req_rise && (arp_state == ARP_IDLE || arp_state == ARP_RESOLVED)) begin
             target_mac_valid <= 1'b0;
             arp_state        <= ARP_WAIT_REPLY;
             do_request       <= 1'b1;

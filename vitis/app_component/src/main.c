@@ -13,6 +13,9 @@ int main(void)
     /* レジスタ設定 + 起動メッセージ表示 */
     toe_cmd_init();
 
+    /* AXI IIC + BME280/AHT20 初期化 */
+    iic_sens_init();
+
     /* メインループ: 終了しない */
     while (1) {
         toe_cmd_poll();

@@ -97,7 +97,8 @@ arp_engine #(
     .rx_tuser         (arp_rx_tuser),
     .tx_tdata         (arp_tx_tdata),
     .tx_tvalid        (arp_tx_tvalid),
-    .tx_tready        (arp_tx_tvalid ? mac_tx_tready : 1'b0),
+    // ARP は UDP 非送信中のみ mac_tx_tready を受け付ける (UDP 送信中は待機)
+    .tx_tready        ((arp_tx_tvalid && !udp_tx_tvalid) ? mac_tx_tready : 1'b0),
     .tx_tlast         (arp_tx_tlast)
 );
 
@@ -132,17 +133,20 @@ udp_layer #(
     .rx_tuser     (udp_rx_tuser),
     .tx_tdata     (udp_tx_tdata),
     .tx_tvalid    (udp_tx_tvalid),
-    .tx_tready    (arp_tx_tvalid ? 1'b0 : mac_tx_tready),
+    // UDP は ARP が非送信中のみ mac_tx_tready を受け付ける
+    .tx_tready    ((arp_tx_tvalid && !udp_tx_tvalid) ? 1'b0 : mac_tx_tready),
     .tx_tlast     (udp_tx_tlast)
 );
 
-// ---- TX arbiter: ARP has priority ------------------------------------------
+// ---- TX arbiter: ARP は UDP 非送信中のみ優先 (送信中割り込み禁止) ----------
 always_comb begin
-    if (arp_tx_tvalid) begin
+    if (arp_tx_tvalid && !udp_tx_tvalid) begin
+        // ARP 送信中 かつ UDP アイドル → ARP を MAC へ
         mac_tx_tdata  = arp_tx_tdata;
         mac_tx_tvalid = arp_tx_tvalid;
         mac_tx_tlast  = arp_tx_tlast;
     end else begin
+        // UDP 送信中 または 両方アイドル → UDP を MAC へ
         mac_tx_tdata  = udp_tx_tdata;
         mac_tx_tvalid = udp_tx_tvalid;
         mac_tx_tlast  = udp_tx_tlast;

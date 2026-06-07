@@ -94,7 +94,53 @@ always_ff @(posedge clk_50 or negedge rst_50_n) begin
             mdc_cnt <= mdc_cnt + 1'b1;
     end
 end
-assign mdio = 1'bz;   // leave MDIO tristated; PHY uses straps
+// ---------------------------------------------------------------------------
+// MDIO初期化: LAN8720を100Mbps Full-duplexに強制設定
+// ★元に戻す場合: 次の1行をコメントアウトする
+`define MDIO_FORCE_100FD
+// ---------------------------------------------------------------------------
+`ifdef MDIO_FORCE_100FD
+localparam [4:0]  MDIO_PHY_ADDR  = 5'd1;
+localparam [4:0]  MDIO_REG_BASIC = 5'd0;
+localparam [15:0] MDIO_CTRL_VAL  = 16'h2100;
+
+localparam [63:0] MDIO_FRAME = {
+    32'hFFFF_FFFF,
+    2'b01,
+    2'b01,
+    MDIO_PHY_ADDR,
+    MDIO_REG_BASIC,
+    2'b10,
+    MDIO_CTRL_VAL
+};
+
+logic [5:0] mdio_bit       = 6'd63;
+logic       mdio_init_done = 1'b0;
+logic       mdio_drv       = 1'b1;
+logic       mdio_val       = 1'b1;
+
+always_ff @(posedge clk_50 or negedge rst_50_n) begin
+    if (!rst_50_n) begin
+        mdio_bit       <= 6'd63;
+        mdio_init_done <= 1'b0;
+        mdio_drv       <= 1'b1;
+        mdio_val       <= 1'b1;
+    end else if (!mdio_init_done) begin
+        if (mdc_cnt == 6'd24 && mdc == 1'b1) begin
+            mdio_val <= MDIO_FRAME[mdio_bit];
+            if (mdio_bit == 6'd0) begin
+                mdio_init_done <= 1'b1;
+                mdio_drv       <= 1'b0;
+            end else
+                mdio_bit <= mdio_bit - 1'b1;
+        end
+    end
+end
+
+assign mdio = mdio_drv ? mdio_val : 1'bz;
+`else
+assign mdio = 1'bz;
+`endif
 
 // ---------------------------------------------------------------------------
 // RMII MAC

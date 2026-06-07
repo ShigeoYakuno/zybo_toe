@@ -4,11 +4,10 @@
     "xci_name": "design_1_toe_top_0_1",
     "cell_name": "toe_top_0",
     "component_reference": "xilinx.com:user:toe_top:1.0",
-    "ip_revision": "23",
+    "ip_revision": "26",
     "gen_directory": "../../../../../../project_1.gen/sources_1/bd/design_1/ip/design_1_toe_top_0_1",
     "parameters": {
       "component_parameters": {
-        "WIN_SIZE": [ { "value": "0x1000", "resolve_type": "user", "format": "bitString", "usage": "all" } ],
         "CLK_HZ": [ { "value": "50000000", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "Component_Name": [ { "value": "design_1_toe_top_0_1", "resolve_type": "user", "usage": "all" } ]
       },
@@ -31,7 +30,7 @@
       },
       "runtime_parameters": {
         "IPCONTEXT": [ { "value": "IP_Integrator" } ],
-        "IPREVISION": [ { "value": "23" } ],
+        "IPREVISION": [ { "value": "26" } ],
         "MANAGED": [ { "value": "TRUE" } ],
         "OUTPUTDIR": [ { "value": "../../../../../../project_1.gen/sources_1/bd/design_1/ip/design_1_toe_top_0_1" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],

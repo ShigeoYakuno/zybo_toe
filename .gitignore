@@ -1,40 +1,23 @@
-# Vivado ビルド生成物
+# Vivado 生成ファイル
 project_1.cache/
 project_1.gen/
-project_1.runs/
 project_1.hw/
 project_1.ip_user_files/
+project_1.runs/
 project_1.sim/
 project_1.tmp/
-project_1.srcs/utils_1/
-
-# Vitis 自動生成・ビルド成果物
-vitis/_ide/
-vitis/platform_toe/
-vitis/app_component/build/
-vitis/app_component/compile_commands.json
-vitis/sample/
-
-# ルート直下のバイナリ (bitstream/ に整理済み)
-/toe_nn1.bit
-/toe_nn2.bit
-/toe_nn1.xsa
-/toe_nn2.xsa
-
-# ログ・一時ファイル
+*.jou
 *.log
+*.str
+*.backup.jou
+*.backup.log
 ip_upgrade.log
 
-# VSCode ワークスペース
-*.code-workspace
+# Vitis 生成ファイル (app src のみ管理対象)
+vitis/platform*/
+vitis/app_component/build/
+vitis/app_component/.metadata/
 
-# Claude Code 設定
-.claude/
-**/.claude/
-
-# clangd キャッシュ
-**/.cache/
-**/.clangd
-
-# Vitis src 内の生成ファイル
-vitis/app_component/src/compile_commands.json
+# その他
+desktop.ini
+.DS_Store

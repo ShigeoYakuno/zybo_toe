@@ -79,6 +79,12 @@ set_property -dict { PACKAGE_PIN G14   IOSTANDARD LVCMOS33 } [get_ports { led_tr
 set_property -dict { PACKAGE_PIN D18   IOSTANDARD LVCMOS33 } [get_ports { led_tri_o[3] }];
 
 
+# sens(JDコネクタ)
+set_property PACKAGE_PIN T14 [get_ports iic_sens_scl_io]   ; # JD1_P
+set_property PACKAGE_PIN T15 [get_ports iic_sens_sda_io]     ; # JD1_N  
+set_property IOSTANDARD LVCMOS33 [get_ports iic_sens_scl_io]
+set_property IOSTANDARD LVCMOS33 [get_ports iic_sens_sda_io]
+
 ## ---------------------------------------------------------------------------
 ## Bitstream settings
 ## ---------------------------------------------------------------------------

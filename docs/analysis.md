@@ -410,6 +410,134 @@ UDP の `udp_layer.sv` の rx_fifo が `READ_MODE("fwft"), FIFO_READ_LATENCY(0)`
 
 ---
 
+## 13. ARP 再調査・修正 (2026-06-07)
+
+### 13.1 経緯
+
+UDP 双方向通信が動作確認できた後、電源を切って再投入すると ARP が通らなくなる症状が再発した。  
+Wireshark では FPGA が 1 秒ごとに ARP Request を送信し、PC が正しく Reply しているが、  
+`arp_state` が `ARP_RESOLVED` に遷移しない状態が続いていた。
+
+---
+
+### 13.2 Bug-A1: arp_engine.sv — rx_bad 蓄積バグ (rev5 修正)
+
+**発見の経緯:**  
+`mii_mac_rx` の `tuser` 仕様を再調査したところ、**旧実装**では `is_crc_valid` がフレーム中に 0 のため  
+tlast 以外の全バイトで `tuser=1` が出力されていた（現行 mii_mac_rx はバグ修正済みで非 tlast バイトは `tuser=0`）。
+
+**問題のコード:**
+```systemverilog
+if (rx_tuser) rx_bad <= 1'b1;  // 旧 mii_mac_rx では非 tlast 全バイトで tuser=1
+                                 // → rx_bad が必ず 1 に蓄積される
+...
+assign rx_is_reply = (rx_oper == 16'h0002) && (rx_spa == target_ip) && !rx_bad;
+// !rx_bad = !1 = FALSE → ARP Reply を永遠に認識できない
+```
+
+**修正:** `rx_bad` 変数を完全削除。FSM ガード `!rx_tuser` (tlast 時) が CRC 検証を担当する。
+
+```systemverilog
+assign rx_is_reply = (rx_oper == 16'h0002) && (rx_spa == target_ip);
+```
+
+---
+
+### 13.3 Bug-A2: arp_engine.sv — send_req レベルセンシティブ再トリガバグ (rev6 修正)
+
+**問題:**  
+ARM は CTRL[2] を約 100µs の HIGH パルスで送る。ARP Reply が 26µs 後に届くため、  
+`send_req` がまだ HIGH の状態で ARP が解決される。
+
+```
+T+26µs   : ARP Reply tlast → ARP_RESOLVED, target_mac_valid=1  (1 クロックのみ)
+T+26µs+1 : send_req=HIGH, ARP_RESOLVED → Block B 発火
+             → ARP_WAIT_REPLY に逆戻り, target_mac_valid=0
+```
+
+`target_mac_valid` が HIGH になるのは **20ns (1 クロック)** だけ。  
+ARM が 500ms ポーリングでこの瞬間を捕まえることは実質不可能。
+
+さらに、この再トリガで 2 発目の ARP Request がすぐに送信されるはずだが、  
+**Wireshark に 2 発目が存在しない** (フレーム番号が連番で間に ARP なし) ことから、  
+実際には ARP Reply そのものが認識されていない (rx_is_reply=FALSE) と判断できる。
+
+**修正:** send_req を立ち上がりエッジ検出に変更。
+
+```systemverilog
+logic send_req_prev = 1'b0;
+always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) send_req_prev <= 1'b0;
+    else        send_req_prev <= send_req;
+end
+wire send_req_rise = send_req && !send_req_prev;
+
+// 変更前: if (send_req && ...)
+// 変更後:
+if (send_req_rise && (arp_state == ARP_IDLE || arp_state == ARP_RESOLVED)) begin
+```
+
+---
+
+### 13.4 mii_mac_rx tuser 仕様の訂正
+
+セクション 12 の記述は**旧 mii_mac_rx (バグあり版)** の仕様。  
+現行 `mii_mac_rx.sv` はバグ修正済みで以下の動作をする:
+
+| バイト種別 | tuser の値 |
+|-----------|-----------|
+| tlast 以外 | **0** (エラーなし固定) |
+| tlast | 0=CRC 正常 / 1=CRC エラー |
+
+セクション 12 の Bug-U1 (udp_layer.sv `!rx_tuser` 削除) の修正は、  
+旧 mii_mac_rx のビットストリームが使われていた時期に発生した問題だった可能性が高い。
+
+---
+
+### 13.5 電源再投入後に ARP が動かない問題
+
+**症状:** FPGA 電源再投入後は ARP が通らない。LAN アダプタとケーブルを一度抜いてから  
+挿し直すと正常動作する。
+
+**根本原因: PHY オートネゴシエーション不完全**
+
+FPGA 電源再投入時、LAN8720 はリセット・再起動して FLP (Fast Link Pulse) を送出する。  
+一方、PC 側の USB LAN アダプタはリンク断を一瞬しか検知せず、前回のリンク設定を  
+キャッシュしたまま再ネゴシエーションをスキップすることがある。
+
+```
+FPGA電源ON → LAN8720リセット → オートネゴシエーション開始
+PC NIC: リンク断を短時間検知 → キャッシュ設定を維持してスキップ
+→ スピード/デュプレックス不一致が発生
+→ PC→FPGA 方向の受信フレームに CRC エラーが多発
+→ tuser=1 at tlast → FSM ガード `!rx_tuser` が常に FALSE
+→ ARP Reply を永久に無視 → 1 秒リトライが延々と続く
+```
+
+LAN アダプタを抜いて「しばらく待つ」ことで PC 側の NIC が完全に初期化され、  
+再接続時に両者が正しく 100Mbps Full-duplex で合意する。
+
+**試みた対策: MDIO による 100Mbps Full-duplex 強制 (`toe_top.sv`)**  
+- rst_50_n リリース後に 64 ビット MDIO ライトフレームを自動送出
+- LAN8720 Basic Control Register (Reg 0) に `0x2100` を書き込む  
+  (bit13=100Mbps, bit8=Full-duplex, bit12=AutoNeg OFF)
+- `\`define MDIO_FORCE_100FD` をコメントアウトすると元の AutoNeg 動作に戻る
+
+**結果:** 改善が限定的。PHY アドレスの違い (デフォルト `5'd1`) か、  
+別の要因が残っている可能性がある。継続調査中。
+
+---
+
+## 7. RTL修正履歴 (続き)
+
+| 日付 | ファイル | 変更内容 |
+|------|---------|---------|
+| 2026-06-06 | arp_engine.sv rev5 | rx_bad 蓄積バグ修正: !rx_bad を rx_is_reply/rx_is_request から削除 |
+| 2026-06-07 | arp_engine.sv rev6 | send_req をレベルセンシティブ→立ち上がりエッジ検出に変更 |
+| 2026-06-07 | toe_top.sv | MDIO 初期化ブロック追加: LAN8720 を 100Mbps Full-duplex に強制 |
+
+---
+
 ## 9. TCP ステート定義
 
 | 値 | 名前 | 意味 |
